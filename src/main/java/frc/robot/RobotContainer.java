@@ -5,7 +5,7 @@
 package frc.robot;
 
 import frc.robot.Constants.OperatorConstants;
-import frc.robot.Constants.SwerveConstants;
+import frc.robot.Constants.DriveConstants;
 import frc.robot.subsystems.SwerveSubsystem;
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -34,13 +34,13 @@ public class RobotContainer {
                 m_swerveSubsystem.drive(
                     -MathUtil.applyDeadband(
                             m_driverController.getLeftY(), OperatorConstants.kJoystickDeadband)
-                        * SwerveConstants.kMaxDriveSpeedMetersPerSecond,
+                        * DriveConstants.kMaxDriveSpeedMetersPerSecond,
                     -MathUtil.applyDeadband(
                             m_driverController.getLeftX(), OperatorConstants.kJoystickDeadband)
-                        * SwerveConstants.kMaxDriveSpeedMetersPerSecond,
+                        * DriveConstants.kMaxDriveSpeedMetersPerSecond,
                     -MathUtil.applyDeadband(
                             m_driverController.getRightX(), OperatorConstants.kJoystickDeadband)
-                        * SwerveConstants.kMaxAngularSpeedRadiansPerSecond,
+                        * DriveConstants.kMaxAngularSpeedRadiansPerSecond,
                     false)));
   }
 

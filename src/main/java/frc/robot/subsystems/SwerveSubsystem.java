@@ -1,11 +1,16 @@
 package frc.robot.subsystems;
 
-import static frc.robot.Constants.SwerveConstants.*;
+import static frc.robot.Constants.DriveConstants.*;
+import static frc.robot.Constants.ModuleConstants.*;
+
+import java.util.HashSet;
+import java.util.Set;
 
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.math.kinematics.SwerveDriveKinematics;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 /** Minimal four-module swerve drivetrain. A real gyro can be attached through {@link GyroIO}. */
@@ -18,11 +23,12 @@ public class SwerveSubsystem extends SubsystemBase {
 
   private final SwerveModule m_frontLeft;
   private final SwerveModule m_frontRight;
-  private final SwerveModule m_rearLeft;
-  private final SwerveModule m_rearRight;
+  private final SwerveModule m_backLeft;
+  private final SwerveModule m_backRight;
   private final SwerveDriveKinematics m_kinematics;
 
-  // No gyro is configured in this project yet. Leave null to drive robot-relative.
+  // The older Astraea robots used navX, but this project has no navX dependency or confirmed gyro.
+  // Leave null to drive robot-relative until the 2026 gyro hardware is verified.
   private GyroIO m_gyro;
 
   public SwerveSubsystem() {
@@ -30,9 +36,10 @@ public class SwerveSubsystem extends SubsystemBase {
 
     m_kinematics =
         new SwerveDriveKinematics(
-            kFrontLeftLocation, kFrontRightLocation, kRearLeftLocation, kRearRightLocation);
+            kFrontLeftLocation, kFrontRightLocation, kBackLeftLocation, kBackRightLocation);
     m_frontLeft =
         createModule(
+            "Front Left",
             kFrontLeftDriveMotorCanId,
             kFrontLeftSteerMotorCanId,
             kFrontLeftCanCoderCanId,
@@ -41,31 +48,35 @@ public class SwerveSubsystem extends SubsystemBase {
             kFrontLeftSteerMotorInverted);
     m_frontRight =
         createModule(
+            "Front Right",
             kFrontRightDriveMotorCanId,
             kFrontRightSteerMotorCanId,
             kFrontRightCanCoderCanId,
             kFrontRightCanCoderOffsetRotations,
             kFrontRightDriveMotorInverted,
             kFrontRightSteerMotorInverted);
-    m_rearLeft =
+    m_backLeft =
         createModule(
-            kRearLeftDriveMotorCanId,
-            kRearLeftSteerMotorCanId,
-            kRearLeftCanCoderCanId,
-            kRearLeftCanCoderOffsetRotations,
-            kRearLeftDriveMotorInverted,
-            kRearLeftSteerMotorInverted);
-    m_rearRight =
+            "Back Left",
+            kBackLeftDriveMotorCanId,
+            kBackLeftSteerMotorCanId,
+            kBackLeftCanCoderCanId,
+            kBackLeftCanCoderOffsetRotations,
+            kBackLeftDriveMotorInverted,
+            kBackLeftSteerMotorInverted);
+    m_backRight =
         createModule(
-            kRearRightDriveMotorCanId,
-            kRearRightSteerMotorCanId,
-            kRearRightCanCoderCanId,
-            kRearRightCanCoderOffsetRotations,
-            kRearRightDriveMotorInverted,
-            kRearRightSteerMotorInverted);
+            "Back Right",
+            kBackRightDriveMotorCanId,
+            kBackRightSteerMotorCanId,
+            kBackRightCanCoderCanId,
+            kBackRightCanCoderOffsetRotations,
+            kBackRightDriveMotorInverted,
+            kBackRightSteerMotorInverted);
   }
 
   private SwerveModule createModule(
+      String name,
       int driveId,
       int steerId,
       int canCoderId,
@@ -73,16 +84,19 @@ public class SwerveSubsystem extends SubsystemBase {
       boolean driveMotorInverted,
       boolean steerMotorInverted) {
     return new SwerveModule(
+        name,
         driveId,
         steerId,
         canCoderId,
         canCoderOffsetRotations,
         kWheelDiameterMeters,
         kDriveGearRatio,
-        kMaxDriveSpeedMetersPerSecond,
         kSteeringKP,
         kSteeringKI,
         kSteeringKD,
+        kDriveKSVolts,
+        kDriveKVVoltSecondsPerMeter,
+        kDriveSpeedDeadbandMetersPerSecond,
         driveMotorInverted,
         steerMotorInverted);
   }
@@ -103,8 +117,8 @@ public class SwerveSubsystem extends SubsystemBase {
     SwerveDriveKinematics.desaturateWheelSpeeds(states, kMaxDriveSpeedMetersPerSecond);
     m_frontLeft.setDesiredState(states[0]);
     m_frontRight.setDesiredState(states[1]);
-    m_rearLeft.setDesiredState(states[2]);
-    m_rearRight.setDesiredState(states[3]);
+    m_backLeft.setDesiredState(states[2]);
+    m_backRight.setDesiredState(states[3]);
   }
 
   /** Adds the eventual gyro implementation without coupling this subsystem to a gyro vendor API. */
@@ -121,21 +135,36 @@ public class SwerveSubsystem extends SubsystemBase {
   public void stop() {
     m_frontLeft.stop();
     m_frontRight.stop();
-    m_rearLeft.stop();
-    m_rearRight.stop();
+    m_backLeft.stop();
+    m_backRight.stop();
+  }
+
+  @Override
+  public void periodic() {
+    m_frontLeft.publishTelemetry();
+    m_frontRight.publishTelemetry();
+    m_backLeft.publishTelemetry();
+    m_backRight.publishTelemetry();
+    if (m_gyro != null) {
+      SmartDashboard.putNumber("Swerve/Gyro Heading Degrees", getHeading().getDegrees());
+    }
   }
 
   private static void validateHardwareConfiguration() {
     int[] canIds = {
       kFrontLeftDriveMotorCanId, kFrontLeftSteerMotorCanId, kFrontLeftCanCoderCanId,
       kFrontRightDriveMotorCanId, kFrontRightSteerMotorCanId, kFrontRightCanCoderCanId,
-      kRearLeftDriveMotorCanId, kRearLeftSteerMotorCanId, kRearLeftCanCoderCanId,
-      kRearRightDriveMotorCanId, kRearRightSteerMotorCanId, kRearRightCanCoderCanId
+      kBackLeftDriveMotorCanId, kBackLeftSteerMotorCanId, kBackLeftCanCoderCanId,
+      kBackRightDriveMotorCanId, kBackRightSteerMotorCanId, kBackRightCanCoderCanId
     };
+    Set<Integer> assignedIds = new HashSet<>();
     for (int canId : canIds) {
       if (canId < 0) {
         throw new IllegalStateException(
-            "Configure all swerve CAN IDs in Constants.SwerveConstants before deploying.");
+            "Configure all swerve CAN IDs in Constants.ModuleConstants before deploying.");
+      }
+      if (!assignedIds.add(canId)) {
+        throw new IllegalStateException("Every swerve device must have a unique CAN ID.");
       }
     }
     if (kWheelDiameterMeters <= 0.0
@@ -146,7 +175,7 @@ public class SwerveSubsystem extends SubsystemBase {
         || kMaxAngularSpeedRadiansPerSecond <= 0.0
         || kSteeringKP <= 0.0) {
       throw new IllegalStateException(
-          "Configure the TODO swerve dimensions, ratios, speeds, and steering PID gains before deploying.");
+          "Configure the TODO swerve dimensions and speed limits before deploying.");
     }
   }
 }

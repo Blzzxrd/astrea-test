@@ -2,20 +2,21 @@ package frc.robot.subsystems;
 
 import static edu.wpi.first.units.Units.Rotations;
 
-import com.ctre.phoenix6.configs.CANcoderConfiguration;
 import com.ctre.phoenix6.hardware.CANcoder;
+import com.revrobotics.PersistMode;
 import com.revrobotics.RelativeEncoder;
-import com.revrobotics.spark.SparkBase.PersistMode;
-import com.revrobotics.spark.SparkBase.ResetMode;
+import com.revrobotics.ResetMode;
 import com.revrobotics.spark.SparkLowLevel.MotorType;
 import com.revrobotics.spark.SparkMax;
 import com.revrobotics.spark.config.SparkBaseConfig.IdleMode;
 import com.revrobotics.spark.config.SparkMaxConfig;
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.controller.PIDController;
+import edu.wpi.first.math.controller.SimpleMotorFeedforward;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.kinematics.SwerveModulePosition;
 import edu.wpi.first.math.kinematics.SwerveModuleState;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 /** Hardware and control for one drive/steer/absolute-encoder swerve module. */
 public class SwerveModule {
@@ -24,29 +25,38 @@ public class SwerveModule {
   private final CANcoder m_canCoder;
   private final RelativeEncoder m_driveEncoder;
   private final PIDController m_steeringPid;
-  private final double m_maxDriveSpeedMetersPerSecond;
+  private final SimpleMotorFeedforward m_driveFeedforward;
+  private final String m_name;
+  private final double m_canCoderOffsetRotations;
+  private final double m_driveSpeedDeadbandMetersPerSecond;
+  private SwerveModuleState m_desiredState = new SwerveModuleState(0.0, new Rotation2d());
 
   /**
    * Creates one module. All supplied IDs and conversion values must come from the team's hardware.
    */
   public SwerveModule(
+      String name,
       int driveMotorCanId,
       int steerMotorCanId,
       int canCoderCanId,
       double canCoderOffsetRotations,
       double wheelDiameterMeters,
       double driveGearRatio,
-      double maxDriveSpeedMetersPerSecond,
       double steeringKp,
       double steeringKi,
       double steeringKd,
+      double driveKsVolts,
+      double driveKvVoltSecondsPerMeter,
+      double driveSpeedDeadbandMetersPerSecond,
       boolean driveMotorInverted,
       boolean steerMotorInverted) {
+    m_name = name;
     m_driveMotor = new SparkMax(driveMotorCanId, MotorType.kBrushless);
     m_steerMotor = new SparkMax(steerMotorCanId, MotorType.kBrushless);
     m_canCoder = new CANcoder(canCoderCanId);
     m_driveEncoder = m_driveMotor.getEncoder();
-    m_maxDriveSpeedMetersPerSecond = maxDriveSpeedMetersPerSecond;
+    m_canCoderOffsetRotations = canCoderOffsetRotations;
+    m_driveSpeedDeadbandMetersPerSecond = driveSpeedDeadbandMetersPerSecond;
 
     // Convert the NEO's motor rotations/RPM to wheel meters/meters per second.
     double driveMetersPerMotorRotation = Math.PI * wheelDiameterMeters / driveGearRatio;
@@ -65,13 +75,9 @@ public class SwerveModule {
     m_steerMotor.configure(
         steerConfig, ResetMode.kResetSafeParameters, PersistMode.kPersistParameters);
 
-    // The offset makes a wheel pointed forward report an angle of zero.
-    CANcoderConfiguration canCoderConfig = new CANcoderConfiguration();
-    canCoderConfig.MagnetSensor.MagnetOffset = canCoderOffsetRotations;
-    m_canCoder.getConfigurator().apply(canCoderConfig);
-
     m_steeringPid = new PIDController(steeringKp, steeringKi, steeringKd);
     m_steeringPid.enableContinuousInput(-Math.PI, Math.PI);
+    m_driveFeedforward = new SimpleMotorFeedforward(driveKsVolts, driveKvVoltSecondsPerMeter);
   }
 
   /** Returns this module's measured wheel speed and absolute steering angle. */
@@ -84,21 +90,27 @@ public class SwerveModule {
     return new SwerveModulePosition(m_driveEncoder.getPosition(), getAngle());
   }
 
-  /** Returns the offset-corrected absolute CANcoder angle. */
+  /** Returns the offset-corrected absolute CANcoder angle, wrapped by {@link Rotation2d}. */
   public Rotation2d getAngle() {
     double rotations = m_canCoder.getAbsolutePosition().refresh().getValue().in(Rotations);
-    return Rotation2d.fromRotations(rotations);
+    return Rotation2d.fromRotations(rotations - m_canCoderOffsetRotations);
   }
 
   /**
-   * Optimizes and applies a requested state. Drive uses open-loop duty cycle; steering uses the
-   * absolute CANcoder and a continuous-input WPILib PID controller.
+   * Optimizes and applies a requested state. Drive uses a simple feedforward voltage; steering
+   * uses the absolute CANcoder and a continuous-input WPILib PID controller.
    */
   public void setDesiredState(SwerveModuleState state) {
-    SwerveModuleState optimizedState = SwerveModuleState.optimize(state, getAngle());
+    SwerveModuleState optimizedState = new SwerveModuleState(state.speedMetersPerSecond, state.angle);
+    optimizedState.optimize(getAngle());
+    m_desiredState = optimizedState;
 
-    double driveOutput = optimizedState.speedMetersPerSecond / m_maxDriveSpeedMetersPerSecond;
-    m_driveMotor.set(MathUtil.clamp(driveOutput, -1.0, 1.0));
+    if (Math.abs(optimizedState.speedMetersPerSecond) < m_driveSpeedDeadbandMetersPerSecond) {
+      m_driveMotor.stopMotor();
+    } else {
+      double driveVolts = m_driveFeedforward.calculate(optimizedState.speedMetersPerSecond);
+      m_driveMotor.setVoltage(MathUtil.clamp(driveVolts, -12.0, 12.0));
+    }
 
     double steerOutput =
         m_steeringPid.calculate(getAngle().getRadians(), optimizedState.angle.getRadians());
@@ -109,5 +121,13 @@ public class SwerveModule {
   public void stop() {
     m_driveMotor.stopMotor();
     m_steerMotor.stopMotor();
+  }
+
+  /** Publishes the small set of values needed for initial module checkout. */
+  public void publishTelemetry() {
+    String keyPrefix = "Swerve/" + m_name + "/";
+    SmartDashboard.putNumber(keyPrefix + "CANcoder Angle Degrees", getAngle().getDegrees());
+    SmartDashboard.putNumber(keyPrefix + "Requested Angle Degrees", m_desiredState.angle.getDegrees());
+    SmartDashboard.putNumber(keyPrefix + "Drive Velocity Meters Per Second", m_driveEncoder.getVelocity());
   }
 }
